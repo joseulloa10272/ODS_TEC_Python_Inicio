@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.DS_Store
+.env
+.env.*
+resultados_inventario/
+resultados_ods/
+config_local/
+*.eml
+*.sqlite3*
+*.xlsx
+01_Correos/
+02_Adjuntos/
+03_Control/
