@@ -30,12 +30,17 @@ El texto de la evidencia queda en `progreso.sqlite3`.
 
 ## Clasificar la muestra
 
-En `config_local/` guarda tu catálogo `Catalogo_ODS_169_Metas_Agenda2030.xlsx`
-y un archivo `tipos_actividad.txt` con los 16 tipos oficiales, uno por línea.
-También se admite un catálogo JSON de código a descripción. La primera
-fila de la hoja de Excel debe contener los encabezados. Si la detección
-automática no elige la hoja o las columnas correctas, indica `--hoja`,
-`--columna-codigo` y `--columna-texto` con sus nombres reales.
+Guarda en `config_local/` los tres archivos del TEC. El script lee las
+169 metas de `Metas ODS`, los 17 tipos de `TiposActividad` y consulta
+localmente `Funcionarios_Directorio_TEC(1).xlsx`. Los libros originales
+sirven como insumos. El resultado se escribe en un Excel independiente.
+
+La asignación exige citas del correo o sus adjuntos. El directorio confirma
+coincidencias únicas por nombre o correo y completa los datos de contacto.
+La dependencia de adscripción en el directorio tiene su propia columna.
+El remitente no se asigna automáticamente como responsable. Las coincidencias
+ambiguas y las actividades con menos de dos metas comprobadas quedan para
+revisión. Se exportan hasta diez códigos distintos por actividad consolidada.
 
 Configura `OPENAI_API_KEY` en la sesión de terminal mediante una entrada
 oculta y usa el identificador de un modelo habilitado para Responses API
@@ -50,8 +55,11 @@ python analizar_ods.py \
   --seleccion resultados_inventario/20261118T205716004269Z/seleccion_analisis_verificada.json \
   --salida resultados_ods/historico --limite 25 --clasificar \
   --modelo "$MODELO_ODS" \
-  --metas config_local/Catalogo_ODS_169_Metas_Agenda2030.xlsx \
-  --tipos config_local/tipos_actividad.txt
+  --metas "config_local/Catalogo_ODS(5).xlsx" \
+  --hoja "Metas ODS" --columna-codigo "Código Meta" \
+  --columna-texto "Meta oficial Agenda 2030" \
+  --tipos "config_local/BD_Actividades_ODSTEC(8).xlsx" \
+  --directorio "config_local/Funcionarios_Directorio_TEC(1).xlsx"
 ```
 
 Revisa un boletín con varias actividades, un anuncio, una actividad

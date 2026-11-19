@@ -22,6 +22,7 @@ from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
+from directorio_ods import cargar_directorio, resolver
 from inventario_ods import inventariar, nombre_ruta, sha_archivo
 
 URL = re.compile(r"""https?://[^\s<>"']+""")
@@ -260,10 +261,19 @@ def cargar_catalogos(args):
         not META.fullmatch(c) or not isinstance(t, str) or not t.strip() for c, t in pares
     ):
         raise ValueError("El catálogo debe incluir 169 códigos únicos de los 17 ODS con texto.")
-    tipos = [linea.strip() for linea in args.tipos.read_text(encoding="utf-8-sig").splitlines()
-             if linea.strip()]
-    if len(tipos) != 16 or len(set(tipos)) != 16:
-        raise ValueError("El archivo de tipos debe incluir los 16 valores oficiales, uno por línea.")
+    if args.tipos.suffix.lower() == ".xlsx":
+        from openpyxl import load_workbook
+        libro = load_workbook(args.tipos, read_only=True, data_only=True)
+        try:
+            tipos = [str(fila[0]).strip() for fila in list(libro["TiposActividad"].values)[1:]
+                     if fila[0] and str(fila[0]).strip()]
+        finally:
+            libro.close()
+    else:
+        tipos = [linea.strip() for linea in args.tipos.read_text(encoding="utf-8-sig").splitlines()
+                 if linea.strip()]
+    if not tipos or len(tipos) != len(set(tipos)):
+        raise ValueError("El catálogo de tipos debe contener valores únicos.")
     return metas, tipos
 
 
@@ -274,11 +284,13 @@ def referencia():
 
 def esquema(tipos):
     propiedades = {campo: {"type": "string"} for campo in
-                   ("nombre", "descripcion", "fecha", "dependencia", "enlace")}
+                   ("nombre", "descripcion", "fecha", "dependencia", "enlace", "responsable", "correo_responsable")}
     propiedades.update({
         "tipo": {"type": "string", "enum": ["", *tipos]},
         "estado": {"type": "string", "enum": ESTADOS},
         "evidencia": {"type": "array", "items": referencia()},
+        "evidencia_responsable": referencia(),
+        "evidencia_dependencia": referencia(),
         "metas": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
             "required": ["codigo", "justificacion", "evidencia"],
@@ -300,10 +312,14 @@ INSTRUCCION = (
     "su fecha haya pasado. Marca realizada solo si hay evidencia explícita de realización. "
     "Usa sin_evidencia_suficiente si hay una actividad concreta con estado indeterminado. "
     "Fecha de actividad en YYYY-MM-DD, distinta de fecha de envío. Identifica dependencia "
-    "responsable por evidencia explícita, sin inferirla del remitente. Deja en blanco campos "
+    "responsable y persona responsable por evidencia explícita, sin inferirlas del remitente. "
+    "Usa evidencia_dependencia y evidencia_responsable con citas literales que identifiquen a la unidad "
+    "y persona como responsables. Si faltan, devuelve fuente y cita vacías. Deja en blanco campos "
     "sin respaldo. Enlace solo si aparece en las fuentes. Incluye citas literales con el ID "
     "de la fuente para los hechos y el estado. Sugiere metas solo del catálogo y solo con "
-    "evidencia concreta del vínculo, justificando cada una. No inventes datos ni códigos."
+    "evidencia concreta del vínculo, justificando cada una. Sugiere de 2 a 10 metas distintas por "
+    "actividad cuando la evidencia lo permita. Si hay respaldo para menos de dos, devuelve solo "
+    "las respaldadas. No inventes datos ni códigos."
 )
 
 
@@ -354,6 +370,18 @@ def validar(actividades, correo, metas):
         actividad["evidencia"] = [r for r in actividad["evidencia"] if cita_valida(r)]
         actividad["metas"] = [m for m in actividad["metas"]
                               if m["codigo"] in metas and cita_valida(m["evidencia"])]
+        actividad["metas"] = list({m["codigo"]: m for m in actividad["metas"]}.values())[:10]
+        for campo, referencia_campo in (("dependencia", "evidencia_dependencia"),
+                                       ("responsable", "evidencia_responsable"),
+                                       ("correo_responsable", "evidencia_responsable")):
+            referencia_dato = actividad[referencia_campo]
+            valor = " ".join(actividad[campo].split()).casefold()
+            cita = " ".join(referencia_dato["cita"].split()).casefold()
+            if valor and cita_valida(referencia_dato) and valor in cita:
+                if referencia_dato not in actividad["evidencia"]:
+                    actividad["evidencia"].append(referencia_dato)
+            else:
+                actividad[campo] = ""
         for campo in ("fecha", "dependencia"):
             if actividad[campo] and not actividad["evidencia"]:
                 actividad[campo] = ""
@@ -397,7 +425,10 @@ def exportar(db, destino):
                 celda.data_type = "s"
 
     agregar(actividades, ["ID actividad", "Nombre", "Tipo", "Descripción", "Fecha",
-                          "Dependencia", "Estado", "Metas sugeridas", "Correo(s) fuente", "Enlace"])
+                          "Dependencia", "Estado", "Metas sugeridas", "Correo(s) fuente", "Enlace",
+                          "ResponsableActividad", "CorreoResponsable", "CorreoDependencia",
+                          "Dependencia según directorio", "Verificación responsable",
+                          "Verificación dependencia", "Estado metas ODS"])
     agregar(fuentes, ["ID actividad", "ID correo", "Remitente", "Asunto", "Fuente",
                       "Archivo", "Ubicación", "Cita"])
     agregar(metas, ["ID actividad", "Meta", "Justificación", "ID correo", "Fuente", "Cita"])
@@ -427,16 +458,31 @@ def exportar(db, destino):
                 agregar(fuentes, [id_actividad, ident, correo.get("remitente"),
                                   correo.get("asunto"), fuente["id"], fuente.get("archivo"),
                                   fuente.get("ubicacion"), evidencia["cita"]])
-            for meta in actividad["metas"]:
-                agregar(metas, [id_actividad, meta["codigo"], meta["justificacion"], ident,
-                                meta["evidencia"]["fuente"], meta["evidencia"]["cita"]])
     for id_actividad, grupo in sorted(grupos.items()):
         _, mejor = max(grupo, key=lambda entrada: prioridad[entrada[1]["estado"]])
-        codigos = sorted({m["codigo"] for _, act in grupo for m in act["metas"]})
+        metas_por_codigo = {}
+        for ident, actividad in sorted(grupo, key=lambda entrada: -prioridad[entrada[1]["estado"]]):
+            for meta in actividad["metas"]:
+                metas_por_codigo.setdefault(meta["codigo"], (ident, meta))
+        codigos = list(metas_por_codigo)[:10]
+        for codigo in codigos:
+            ident, meta = metas_por_codigo[codigo]
+            agregar(metas, [id_actividad, codigo, meta["justificacion"], ident,
+                            meta["evidencia"]["fuente"], meta["evidencia"]["cita"]])
+        responsables = {(act.get("responsable", ""), act.get("correo_responsable", ""))
+                        for _, act in grupo if act.get("verificacion_responsable") == "coincidencia_directorio"}
+        responsable, correo_responsable = (next(iter(responsables)) if len(responsables) == 1
+                                            else ("", "") if responsables else
+                                            (mejor.get("responsable"), mejor.get("correo_responsable")))
+        estado_responsable = ("requiere_revision" if len(responsables) > 1 else
+                              "coincidencia_directorio" if responsables else mejor.get("verificacion_responsable"))
         agregar(actividades, [id_actividad, mejor["nombre"], mejor["tipo"], mejor["descripcion"],
                               mejor["fecha"], mejor["dependencia"], mejor["estado"],
                               ", ".join(codigos), ", ".join(sorted({i for i, _ in grupo})),
-                              mejor["enlace"]])
+                              mejor["enlace"], responsable, correo_responsable,
+                              mejor.get("correo_dependencia"), mejor.get("dependencia_directorio"),
+                              estado_responsable, mejor.get("verificacion_dependencia"),
+                              "suficientes" if len(codigos) >= 2 else "requiere_revision_menos_de_2"])
     for hoja in libro:
         hoja.freeze_panes = "A2"
         hoja.auto_filter.ref = hoja.dimensions
@@ -462,6 +508,7 @@ def main():
     parser.add_argument("--modelo")
     parser.add_argument("--metas", type=Path)
     parser.add_argument("--tipos", type=Path)
+    parser.add_argument("--directorio", type=Path)
     parser.add_argument("--hoja")
     parser.add_argument("--columna-codigo")
     parser.add_argument("--columna-texto")
@@ -478,10 +525,11 @@ def main():
         parser.error("Indica ambos nombres de columnas.")
     configuracion = None
     if args.clasificar:
-        if not all((args.modelo, args.metas, args.tipos, os.getenv("OPENAI_API_KEY"))):
-            parser.error("--clasificar requiere --modelo, --metas, --tipos y OPENAI_API_KEY.")
+        if not all((args.modelo, args.metas, args.tipos, args.directorio, os.getenv("OPENAI_API_KEY"))):
+            parser.error("--clasificar requiere --modelo, --metas, --tipos, --directorio y OPENAI_API_KEY.")
         metas, tipos = cargar_catalogos(args)
-        configuracion = firma([INSTRUCCION, esquema(tipos), args.modelo, metas])
+        directorio = cargar_directorio(args.directorio)
+        configuracion = firma([INSTRUCCION, esquema(tipos), args.modelo, metas, sha_archivo(args.directorio)])
 
     if not args.solo_exportar:
         if args.raiz:
@@ -507,7 +555,7 @@ def main():
         )""")
         if not args.solo_exportar:
             procesar(db, correos, indice, args, configuracion,
-                     (metas, tipos) if configuracion else None)
+                     (metas, tipos, directorio) if configuracion else None)
         exportar(db, args.salida / "Actividades_ODS.xlsx")
         for estado, cantidad in db.execute("SELECT estado, COUNT(*) FROM correos GROUP BY estado"):
             print(f"{cantidad:4} {estado}")
@@ -551,8 +599,14 @@ def procesar(db, correos, indice, args, configuracion, catalogos):
                 db.execute("INSERT OR REPLACE INTO correos VALUES (?, ?, ?, ?, ?, ?, ?)",
                            (ident, huella, estado, json.dumps(evidencia), None, None, None))
                 db.commit()
-                resultado = clasificar(evidencia, *catalogos, args.modelo, os.environ["OPENAI_API_KEY"])
-                dudoso = any(a["estado"] == "sin_evidencia_suficiente" for a in resultado)
+                metas, tipos, directorio = catalogos
+                resultado = clasificar(evidencia, metas, tipos, args.modelo, os.environ["OPENAI_API_KEY"])
+                for actividad in resultado:
+                    resolver(actividad, directorio)
+                dudoso = any(a["estado"] == "sin_evidencia_suficiente" or len(a["metas"]) < 2
+                             or a["verificacion_responsable"] != "coincidencia_directorio"
+                             or a["verificacion_dependencia"] != "coincidencia_directorio"
+                             for a in resultado)
                 estado = ("requiere_revision" if incidencia or dudoso or (not resultado and evidencia["enlaces"])
                           else "clasificado" if resultado else "sin_actividad")
             db.execute("INSERT OR REPLACE INTO correos VALUES (?, ?, ?, ?, ?, ?, ?)",
