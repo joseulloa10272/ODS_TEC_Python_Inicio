@@ -4,6 +4,8 @@ import argparse
 from collections import Counter, defaultdict
 from datetime import date, datetime, timezone
 import csv
+from email import policy
+from email.parser import BytesParser
 import hashlib
 import json
 from pathlib import Path
@@ -12,6 +14,20 @@ import sys
 from urllib.parse import unquote, urlsplit
 
 VERSION = '1.0.0'
+
+def huellas_eml(ruta):
+    with ruta.open('rb') as archivo:
+        mensaje = BytesParser(policy=policy.default).parse(archivo)
+    huellas = set()
+    for parte in mensaje.walk():
+        if parte.is_multipart():
+            continue
+        if parte.get_filename() or parte.get('Content-ID') or parte.get_content_disposition() in {'inline', 'attachment'}:
+            datos = parte.get_payload(decode=True)
+            if datos and not parte.defects:
+                huellas.add(hashlib.sha256(datos).hexdigest())
+    return huellas
+
 
 def normalizar(nombre):
     return re.sub(r'[^a-z0-9]', '', nombre.lower())
@@ -63,7 +79,7 @@ def escribir_csv(path, filas, campos):
         for row in filas:
             writer.writerow({k: valor_csv(row.get(k, '')) for k in campos})
 
-def inventariar(raiz, salida, inicio='2026-06-10', fin='2026-11-16', huellas=True, exclusiones=None, progreso=True):
+def inventariar(raiz, salida, inicio='2026-06-10', fin='2026-11-16', huellas=True, exclusiones=None, progreso=True, verificar_eml=False):
     raiz = Path(raiz).expanduser().resolve()
     salida = Path(salida).expanduser().resolve()
     inicio_d, fin_d = date.fromisoformat(inicio), date.fromisoformat(fin)
@@ -127,13 +143,16 @@ def inventariar(raiz, salida, inicio='2026-06-10', fin='2026-11-16', huellas=Tru
 
     filas, grupos, todos_ids = [], defaultdict(list), set()
     adjuntos_con_huella = {r['archivo'] for r in inventario_adjuntos if r['sha256']}
+    huellas_locales = {r['archivo']: r['sha256'] for r in inventario_adjuntos}
     emls_referidos, adjuntos_referidos = set(), set()
+    diferencias_confirmadas = 0
     for p in (f for f in fs_correos if f.suffix.lower() == '.json'):
         row = {'archivo_json': str(p), 'archivo_eml': '', 'id_correo': '', 'internet_message_id': '',
                'clave_archivo': '', 'asunto': '', 'fecha_consulta': '', 'estado_json': '',
                'control_confirmado': False, 'adjuntos_manifestados': 0, 'adjuntos_localizados': 0,
                'estado_inventario': 'NoUtilizable', 'seleccionado': False, 'motivos': ''}
         motivos = []
+        huellas_del_mensaje = None
         try:
             d = json.loads(p.read_text(encoding='utf-8-sig'))
             if not isinstance(d, dict) or not isinstance(d.get('correo'), dict):
@@ -200,7 +219,16 @@ def inventariar(raiz, salida, inicio='2026-06-10', fin='2026-11-16', huellas=Tru
                 expected = adj.get('size')
                 real = archivo.stat().st_size
                 if isinstance(expected, int) and expected >= 0 and real != expected:
-                    motivos.append('tamano_adjunto_no_coincide')
+                    if verificar_eml and row['archivo_eml']:
+                        if huellas_del_mensaje is None:
+                            huellas_del_mensaje = huellas_eml(Path(row['archivo_eml']))
+                        huella = huellas_locales.get(str(archivo)) or sha_archivo(archivo)
+                        if huella in huellas_del_mensaje:
+                            diferencias_confirmadas += 1
+                        else:
+                            motivos.append('tamano_adjunto_no_coincide')
+                    else:
+                        motivos.append('tamano_adjunto_no_coincide')
                 if real == 0:
                     motivos.append('adjunto_vacio')
                 if huellas and str(archivo) not in adjuntos_con_huella:
@@ -274,7 +302,8 @@ def inventariar(raiz, salida, inicio='2026-06-10', fin='2026-11-16', huellas=Tru
         'copiasBinariasAdicionales': sum(len(v)-1 for v in sha_grupos.values()) if huellas else None,
         'extensionesAdjuntos': dict(Counter(r['extension'] or '(sin extension)' for r in inventario_adjuntos)),
         'exclusionesExplicitasSolicitadas': len(excluidos),
-        'alcance': 'Comprueba registros JSON, controles, parejas EML y archivos referenciados; no valida todavía la integridad MIME del EML ni realiza OCR, limpieza, IA o conteo de tokens.'}
+        'diferenciasTamanoConfirmadasPorEML': diferencias_confirmadas,
+        'alcance': 'Comprueba registros JSON, controles, parejas EML y archivos referenciados; con verificación EML confirma por SHA-256 los adjuntos con tamaño discrepante. El OCR y la clasificación son pasos posteriores.'}
     (salida/'resumen_inventario.json').write_text(json.dumps(resumen, ensure_ascii=False, indent=2), encoding='utf-8')
     return resumen
 
@@ -284,6 +313,7 @@ def main():
     parser.add_argument('--salida', type=Path, help='Carpeta vacía para los informes; predeterminado: resultados_inventario/fechaUTC.')
     parser.add_argument('--inicio', default='2026-06-10')
     parser.add_argument('--fin', default='2026-11-16')
+    parser.add_argument('--verificar-eml', action='store_true', help='Confirmar por SHA-256 los adjuntos cuyo tamaño difiere del JSON.')
     parser.add_argument('--sin-huellas', action='store_true', help='Omitir lectura binaria SHA-256 de adjuntos; no detecta duplicados de contenido.')
     parser.add_argument('--exclusiones', type=Path, help='JSON opcional con ids_correo: lista de IDs originales.')
     args = parser.parse_args()
@@ -297,7 +327,7 @@ def main():
             ex = obj['ids_correo']
             if not isinstance(ex, list) or any(not isinstance(x, str) or not x for x in ex):
                 raise ValueError('ids_correo debe ser una lista de identificadores de Outlook no vacíos.')
-        r = inventariar(args.raiz, salida, args.inicio, args.fin, not args.sin_huellas, ex)
+        r = inventariar(args.raiz, salida, args.inicio, args.fin, not args.sin_huellas, ex, verificar_eml=args.verificar_eml)
         print(json.dumps(r, ensure_ascii=False, indent=2))
         print('\nInformes guardados en: ' + str(salida.resolve()))
         return 0
