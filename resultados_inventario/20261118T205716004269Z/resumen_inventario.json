@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1.0.0",
+  "generadoUTC": "2026-11-18T21:47:46.534280+00:00",
+  "raiz": "/Users/joseulloa10272/Documents/ODS_TEC_Extraccion_Historica/ODS_TEC_Extraccion_Historica",
+  "fechaInicio": "2026-06-10",
+  "fechaFin": "2026-11-16",
+  "archivos01": 1906,
+  "json01": 953,
+  "eml01": 953,
+  "archivos02": 2699,
+  "bytes01": 1880066181,
+  "bytes02": 1336845596,
+  "correosUnicosPorId": 943,
+  "correosSeleccionados": 116,
+  "idsSinVersionCompletaVerificada": 827,
+  "copiasJsonAdicionalesPorId": 10,
+  "estadosInventario": {
+    "PendienteOExcluido": 837,
+    "CompletoVerificado": 116
+  },
+  "archivosConIncidencia": 0,
+  "tiposIncidencia": {},
+  "controlesDiariosUtilizables": 160,
+  "huellasAdjuntosCalculadas": true,
+  "contenidosUnicosAdjuntos": 1177,
+  "copiasBinariasAdicionales": 1522,
+  "extensionesAdjuntos": {
+    ".png": 1661,
+    ".docx": 139,
+    ".pdf": 278,
+    ".jpg": 223,
+    ".bin": 29,
+    ".jpeg": 329,
+    ".mp4": 4,
+    ".gif": 7,
+    ".html": 2,
+    ".pptx": 2,
+    ".xlsx": 25
+  },
+  "exclusionesExplicitasSolicitadas": 0,
+  "alcance": "Comprueba registros JSON, controles, parejas EML y archivos referenciados; no valida todavía la integridad MIME del EML ni realiza OCR, limpieza, IA o conteo de tokens."
+}

@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "1.0.0",
+  "generadoUTC": "2026-11-18T20:19:11.601306+00:00",
+  "raiz": "/Users/joseulloa10272/Documents/ODS_TEC_Extraccion_Historica/ODS_TEC_Extraccion_Historica",
+  "fechaInicio": "2026-06-10",
+  "fechaFin": "2026-11-16",
+  "archivos01": 1906,
+  "json01": 953,
+  "eml01": 953,
+  "archivos02": 200,
+  "bytes01": 1880066181,
+  "bytes02": 200620214,
+  "correosUnicosPorId": 943,
+  "correosSeleccionados": 116,
+  "idsSinVersionCompletaVerificada": 827,
+  "copiasJsonAdicionalesPorId": 10,
+  "estadosInventario": {
+    "PendienteOExcluido": 837,
+    "CompletoVerificado": 116
+  },
+  "archivosConIncidencia": 0,
+  "tiposIncidencia": {},
+  "controlesDiariosUtilizables": 160,
+  "huellasAdjuntosCalculadas": true,
+  "contenidosUnicosAdjuntos": 168,
+  "copiasBinariasAdicionales": 32,
+  "extensionesAdjuntos": {
+    ".png": 130,
+    ".docx": 18,
+    ".pdf": 18,
+    ".jpg": 16,
+    ".bin": 2,
+    ".jpeg": 14,
+    ".mp4": 1,
+    ".gif": 1
+  },
+  "exclusionesExplicitasSolicitadas": 0,
+  "alcance": "Comprueba registros JSON, controles, parejas EML y archivos referenciados; no valida todavía la integridad MIME del EML ni realiza OCR, limpieza, IA o conteo de tokens."
+}
